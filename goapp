@@ -1,0 +1,67 @@
+package main
+
+import (
+    "context"
+    "log"
+    "net/http"
+    "time"
+
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/exporters/jaeger"
+    "go.opentelemetry.io/otel/propagation"
+    "go.opentelemetry.io/otel/sdk/resource"
+    "go.opentelemetry.io/otel/sdk/trace"
+    "go.opentelemetry.io/otel/semconv"
+    "go.opentelemetry.io/otel/trace"
+)
+
+func main() {
+    // Set up OpenTelemetry Jaeger exporter
+    jaegerEndpoint := "http://localhost:14268/api/traces"
+    jaegerUsername := ""
+    jaegerPassword := ""
+    jaegerExporter, err := jaeger.NewRawExporter(
+        jaeger.WithCollectorEndpoint(jaegerEndpoint),
+        jaeger.WithUsername(jaegerUsername),
+        jaeger.WithPassword(jaegerPassword),
+    )
+    if err != nil {
+        log.Fatalf("Failed to create Jaeger exporter: %v", err)
+    }
+
+    // Set up tracer provider with Jaeger exporter and propagator
+    tracerProvider := trace.NewTracerProvider(
+        trace.WithConfig(trace.Config{DefaultSampler: trace.AlwaysSample()}),
+        trace.WithSyncer(jaegerExporter),
+        trace.WithResource(resource.NewWithAttributes(
+            semconv.ServiceNameKey.String("my-service"),
+            attribute.String("environment", "production"),
+        )),
+        trace.WithIDGenerator(trace.NewIDGeneratorRandom()),
+    )
+    tracerProvider.Register()
+
+    // Use the global tracer to instrument HTTP handlers
+    tracer := otel.Tracer("my-tracer")
+
+    // Define an HTTP handler that creates a span and adds some attributes
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        ctx := r.Context()
+        span := tracer.Start(ctx, "my-handler")
+        defer span.End()
+
+        // Add some attributes to the span
+        span.SetAttributes(attribute.String("http.method", r.Method))
+        span.SetAttributes(attribute.String("http.path", r.URL.Path))
+
+        // Simulate some work
+        time.Sleep(100 * time.Millisecond)
+
+        w.WriteHeader(http.StatusOK)
+        w.Write([]byte("Hello, world!"))
+    })
+
+    // Start the HTTP server
+    log.Println("Listening on :8080...")
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
